@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Colorado Broadband Access</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    #map { width: 100vw; height: 100vh; }
+
+    /* Loading overlay */
+    #loading {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.88);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      font-size: 1rem;
+      color: #444;
+      gap: 0.75rem;
+      text-align: center;
+    }
+    .spinner {
+      width: 24px; height: 24px;
+      border: 3px solid #ddd;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Shared panel shell */
+    .panel {
+      background: white;
+      border-radius: 6px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+      font-size: 0.78rem;
+      color: #374151;
+    }
+
+    /* Title + tier selector */
+    #control-panel {
+      padding: 12px 14px;
+      min-width: 230px;
+    }
+    #control-panel h1 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 2px;
+    }
+    #control-panel .subtitle {
+      font-size: 0.7rem;
+      color: #6b7280;
+      margin-bottom: 10px;
+    }
+    #control-panel label {
+      display: block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+    }
+    #tier-select {
+      width: 100%;
+      padding: 5px 8px;
+      font-size: 0.78rem;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      color: #111827;
+    }
+    #tier-select:focus { outline: 2px solid #2563eb; outline-offset: 1px; }
+
+    /* Hover info panel */
+    #info-panel {
+      padding: 10px 13px;
+      min-width: 170px;
+    }
+    #info-panel .place-name {
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 2px;
+      font-size: 0.82rem;
+    }
+    #info-panel .tier-label { color: #6b7280; font-size: 0.72rem; }
+    #info-panel .big-value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #111827;
+      line-height: 1.15;
+      margin: 3px 0;
+    }
+    #info-panel .units { color: #9ca3af; font-size: 0.68rem; }
+    #info-panel .prompt { color: #9ca3af; }
+
+    /* Legend */
+    #legend {
+      padding: 10px 13px;
+    }
+    #legend h3 {
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 4px;
+    }
+    .legend-swatch {
+      width: 14px; height: 14px;
+      border-radius: 2px;
+      border: 1px solid rgba(0,0,0,0.08);
+      flex-shrink: 0;
+    }
+
+    /* Popup */
+    .popup-inner { font-size: 0.8rem; min-width: 230px; }
+    .popup-inner .pop-title {
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+    .popup-inner table { border-collapse: collapse; width: 100%; }
+    .popup-inner th {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+      padding: 6px 6px 3px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .popup-inner td {
+      padding: 4px 6px;
+      color: #374151;
+    }
+    .popup-inner tr:nth-child(even) td { background: #f9fafb; }
+    .popup-inner td:last-child { text-align: right; font-weight: 600; color: #111827; }
+    .popup-inner .pop-divider td {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+      padding: 8px 6px 2px;
+      border-top: 1px solid #e5e7eb;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading"><div class="spinner"></div> Loading broadband data…</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── Data definitions ─────────────────────────────────────────────────────────
+const TIERS = [
+  { key: 'bb_speed_25_3',     label: '25/3 Mbps',        note: 'FCC broadband threshold' },
+  { key: 'bb_speed_100_20',   label: '100/20 Mbps',       note: 'Current FCC standard'    },
+  { key: 'bb_speed_1000_100', label: '1 Gbps / 100 Mbps', note: 'Gigabit tier'            },
+  { key: 'bb_speed_250_25',   label: '250/25 Mbps',       note: 'High-speed tier'         },
+  { key: 'bb_speed_10_1',     label: '10/1 Mbps',         note: 'Basic tier'              },
+  { key: 'bb_speed_02_02',    label: '2/2 Mbps',          note: 'Minimum tier'            },
+];
+
+// RdYlGn 5-class, high = green (good access)
+const COLOR_BREAKS = [0.8, 0.6, 0.4, 0.2];
+const COLOR_VALS   = ['#1a9641', '#a6d96a', '#ffffbf', '#fdae61', '#d7191c'];
+const COLOR_NO_DATA = '#cccccc';
+
+function getColor(v) {
+  if (v == null) return COLOR_NO_DATA;
+  for (let i = 0; i < COLOR_BREAKS.length; i++) {
+    if (v > COLOR_BREAKS[i]) return COLOR_VALS[i];
+  }
+  return COLOR_VALS[COLOR_VALS.length - 1];
+}
+
+function pct(v) {
+  return v == null ? 'No data' : (v * 100).toFixed(1) + '%';
+}
+
+// ── Map setup ────────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true }).setView([38.9, -105.5], 7);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution:
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' +
+    ' | Data: <a href="https://broadbandmap.fcc.gov/">FCC BDC</a>' +
+    ' &amp; <a href="https://geodata.bts.gov/">NTAD</a>',
+  maxZoom: 18
+}).addTo(map);
+
+let activeTierKey = TIERS[0].key;
+let geojsonLayer  = null;
+
+// ── Control: title + tier dropdown ───────────────────────────────────────────
+const ControlWidget = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd() {
+    const div = L.DomUtil.create('div', 'panel');
+    div.id = 'control-panel';
+    div.innerHTML = `
+      <h1>Colorado Broadband Access</h1>
+      <p class="subtitle">Residential coverage by census place &middot; FCC BDC Mar 2026</p>
+      <label for="tier-select">Speed tier</label>
+      <select id="tier-select">
+        ${TIERS.map(t =>
+          `<option value="${t.key}">${t.label} — ${t.note}</option>`
+        ).join('')}
+      </select>
+    `;
+    L.DomEvent.disableClickPropagation(div);
+    L.DomEvent.disableScrollPropagation(div);
+    return div;
+  }
+});
+new ControlWidget().addTo(map);
+
+// ── Control: hover info panel ─────────────────────────────────────────────────
+const InfoWidget = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd() {
+    this._el = L.DomUtil.create('div', 'panel');
+    this._el.id = 'info-panel';
+    this.clear();
+    return this._el;
+  },
+  show(props) {
+    const tier = TIERS.find(t => t.key === activeTierKey);
+    const v    = props[activeTierKey];
+    this._el.innerHTML = `
+      <div class="place-name">${props.NAMELSAD}</div>
+      <div class="tier-label">${tier.label}</div>
+      <div class="big-value">${pct(v)}</div>
+      <div class="units">${props.bb_total_units != null ? props.bb_total_units.toLocaleString() + ' housing units' : ''}</div>
+    `;
+  },
+  clear() {
+    this._el.innerHTML = '<span class="prompt">Hover over a place</span>';
+  }
+});
+const infoWidget = new InfoWidget().addTo(map);
+
+// ── Control: legend ───────────────────────────────────────────────────────────
+const LegendWidget = L.Control.extend({
+  options: { position: 'bottomright' },
+  onAdd() {
+    const div = L.DomUtil.create('div', 'panel');
+    div.id = 'legend';
+    const items = [
+      { color: COLOR_VALS[0], label: '> 80%'     },
+      { color: COLOR_VALS[1], label: '60 – 80%'  },
+      { color: COLOR_VALS[2], label: '40 – 60%'  },
+      { color: COLOR_VALS[3], label: '20 – 40%'  },
+      { color: COLOR_VALS[4], label: '≤ 20%'     },
+      { color: COLOR_NO_DATA, label: 'No data'   },
+    ];
+    div.innerHTML = `
+      <h3>% with access</h3>
+      ${items.map(i => `
+        <div class="legend-row">
+          <div class="legend-swatch" style="background:${i.color}"></div>
+          <span>${i.label}</span>
+        </div>`).join('')}
+    `;
+    return div;
+  }
+});
+new LegendWidget().addTo(map);
+
+// ── GeoJSON layer ─────────────────────────────────────────────────────────────
+function layerStyle(feature) {
+  return {
+    fillColor:   getColor(feature.properties[activeTierKey]),
+    fillOpacity: 0.82,
+    weight:      0.6,
+    color:       '#ffffff',
+  };
+}
+
+function onEachFeature(feature, layer) {
+  layer.on({
+    mouseover(e) {
+      e.target.setStyle({ weight: 2.5, color: '#1e293b', fillOpacity: 0.95 });
+      e.target.bringToFront();
+      infoWidget.show(feature.properties);
+    },
+    mouseout(e) {
+      geojsonLayer.resetStyle(e.target);
+      infoWidget.clear();
+    },
+    click(e) {
+      const p = feature.properties;
+      const speedRows = TIERS.map(t =>
+        `<tr><td>${t.label}</td><td>${pct(p[t.key])}</td></tr>`
+      ).join('');
+      const content = `
+        <div class="popup-inner">
+          <div class="pop-title">${p.NAMELSAD}</div>
+          <table>
+            <tr><th>Speed tier</th><th>Coverage</th></tr>
+            ${speedRows}
+            <tr class="pop-divider"><td colspan="2">Demographics</td></tr>
+            <tr><td>Housing units</td><td>${p.bb_total_units != null ? p.bb_total_units.toLocaleString() : '—'}</td></tr>
+            <tr><td>Population (2020)</td><td>${p.POP2020 != null ? p.POP2020.toLocaleString() : '—'}</td></tr>
+          </table>
+        </div>
+      `;
+      L.popup({ maxWidth: 300 })
+        .setLatLng(e.latlng)
+        .setContent(content)
+        .openOn(map);
+    }
+  });
+}
+
+// ── Fetch and render ──────────────────────────────────────────────────────────
+fetch('colorado_broadband_access.geojson')
+  .then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  })
+  .then(data => {
+    geojsonLayer = L.geoJSON(data, { style: layerStyle, onEachFeature }).addTo(map);
+    document.getElementById('loading').style.display = 'none';
+
+    document.getElementById('tier-select').addEventListener('change', e => {
+      activeTierKey = e.target.value;
+      geojsonLayer.setStyle(layerStyle);
+    });
+  })
+  .catch(err => {
+    document.getElementById('loading').innerHTML = `
+      <div>
+        <strong style="color:#dc2626">Could not load data</strong><br><br>
+        ${err.message}<br><br>
+        To run locally, open a terminal in this folder and run:<br>
+        <code>python3 -m http.server 8000</code><br>
+        then open <a href="http://localhost:8000">http://localhost:8000</a>
+      </div>`;
+  });
+</script>
+</body>
+</html>
